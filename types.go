@@ -1,7 +1,7 @@
 // Package notify is the scope-agnostic notification system (extracted from the HSTLES notify domain). It
 // owns in-app notifications, per-user push device tokens, and per-category channel preferences over an
 // injected store, and fans a notification out to pluggable delivery Sinks. The primary axis (a baked
-// tenant) is an opaque Owner the system never interprets; the user id is opaque; and delivery channels
+// tenant) is an opaque Partition the system never interprets; the user id is opaque; and delivery channels
 // are opaque strings a consumer registers a Sink for ("in_app", "email", "push", "sms", "webhook", or
 // anything else) — so the channel set is extensible, not a fixed enum. Times are time.Time; a nil
 // *time.Time means "not yet" (unread / not dismissed / not invalidated).
@@ -9,11 +9,11 @@ package notify
 
 import "time"
 
-// Notification is a single notification addressed to a user. Owner is the opaque owner-scope; Metadata
+// Notification is a single notification addressed to a user. Partition is the opaque partition-scope; Metadata
 // is opaque JSON a consumer attaches; DeliveredVia records the opaque channel names it was delivered on.
 type Notification struct {
 	ID           string
-	Owner        string // opaque owner-scope (was tenant)
+	Partition        string // opaque partition-scope (was tenant)
 	UserID       string
 	Category     string
 	Title        string
@@ -36,7 +36,7 @@ type Notification struct {
 // InvalidatedAt set so a delivery attempt can prune it.
 type DeviceToken struct {
 	ID            string
-	Owner         string // opaque owner-scope
+	Partition         string // opaque partition-scope
 	UserID        string
 	Token         string
 	Platform      string
@@ -50,7 +50,7 @@ type DeviceToken struct {
 // whether the user wants that category delivered on it. Category "*" is the default applied when no
 // exact-category preference exists.
 type Preference struct {
-	Owner     string
+	Partition     string
 	UserID    string
 	Category  string
 	Channels  map[string]bool

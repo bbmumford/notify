@@ -11,8 +11,8 @@ import (
 )
 
 // MemStore is the in-memory reference Store — the test/dev backend and the semantic reference a durable
-// (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Owner is opaque; "" on an
-// owner-scoped read means any owner.
+// (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Partition is opaque; "" on an
+// partition-scoped read means any partition.
 type MemStore struct {
 	mu     sync.Mutex
 	notifs map[string]*Notification
@@ -38,7 +38,7 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
-func ownerMatch(want, have string) bool { return want == "" || want == have }
+func partitionMatch(want, have string) bool { return want == "" || want == have }
 
 // ── Notifications ──
 
@@ -55,20 +55,20 @@ func (m *MemStore) CreateNotification(_ context.Context, n *Notification) error 
 	return nil
 }
 
-func (m *MemStore) GetNotification(_ context.Context, owner, userID, id string) (*Notification, error) {
+func (m *MemStore) GetNotification(_ context.Context, partition, userID, id string) (*Notification, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n, ok := m.notifs[id]
-	if !ok || !ownerMatch(owner, n.Owner) || (userID != "" && n.UserID != userID) {
+	if !ok || !partitionMatch(partition, n.Partition) || (userID != "" && n.UserID != userID) {
 		return nil, ErrNotFound
 	}
 	return cloneNotification(n), nil
 }
 
-func (m *MemStore) userNotifs(owner, userID string) []*Notification {
+func (m *MemStore) userNotifs(partition, userID string) []*Notification {
 	var out []*Notification
 	for _, n := range m.notifs {
-		if ownerMatch(owner, n.Owner) && n.UserID == userID {
+		if partitionMatch(partition, n.Partition) && n.UserID == userID {
 			out = append(out, n)
 		}
 	}
@@ -82,10 +82,10 @@ func (m *MemStore) userNotifs(owner, userID string) []*Notification {
 	return out
 }
 
-func (m *MemStore) ListNotifications(_ context.Context, owner, userID, category string, unreadOnly bool, limit int, cursor string) ([]*Notification, string, error) {
+func (m *MemStore) ListNotifications(_ context.Context, partition, userID, category string, unreadOnly bool, limit int, cursor string) ([]*Notification, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	all := m.userNotifs(owner, userID)
+	all := m.userNotifs(partition, userID)
 	var filtered []*Notification
 	for _, n := range all {
 		if n.Dismissed {
@@ -122,11 +122,11 @@ func (m *MemStore) ListNotifications(_ context.Context, owner, userID, category 
 	return out, next, nil
 }
 
-func (m *MemStore) ListNotificationsSince(_ context.Context, owner, userID string, since time.Time) ([]*Notification, error) {
+func (m *MemStore) ListNotificationsSince(_ context.Context, partition, userID string, since time.Time) ([]*Notification, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Notification
-	for _, n := range m.userNotifs(owner, userID) {
+	for _, n := range m.userNotifs(partition, userID) {
 		if n.Dismissed || !n.CreatedAt.After(since) {
 			continue
 		}
@@ -135,12 +135,12 @@ func (m *MemStore) ListNotificationsSince(_ context.Context, owner, userID strin
 	return out, nil
 }
 
-func (m *MemStore) UnreadCount(_ context.Context, owner, userID string) (int, *time.Time, error) {
+func (m *MemStore) UnreadCount(_ context.Context, partition, userID string) (int, *time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	count := 0
 	var latest *time.Time
-	for _, n := range m.userNotifs(owner, userID) {
+	for _, n := range m.userNotifs(partition, userID) {
 		if n.Read || n.Dismissed {
 			continue
 		}
@@ -153,7 +153,7 @@ func (m *MemStore) UnreadCount(_ context.Context, owner, userID string) (int, *t
 	return count, latest, nil
 }
 
-func (m *MemStore) MarkRead(_ context.Context, owner, userID string, ids []string) (int, error) {
+func (m *MemStore) MarkRead(_ context.Context, partition, userID string, ids []string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	want := map[string]bool{}
@@ -162,7 +162,7 @@ func (m *MemStore) MarkRead(_ context.Context, owner, userID string, ids []strin
 	}
 	n := 0
 	for _, notif := range m.notifs {
-		if want[notif.ID] && ownerMatch(owner, notif.Owner) && notif.UserID == userID && !notif.Read {
+		if want[notif.ID] && partitionMatch(partition, notif.Partition) && notif.UserID == userID && !notif.Read {
 			notif.Read = true
 			t := m.now()
 			notif.ReadAt = &t
@@ -172,12 +172,12 @@ func (m *MemStore) MarkRead(_ context.Context, owner, userID string, ids []strin
 	return n, nil
 }
 
-func (m *MemStore) MarkAllRead(_ context.Context, owner, userID string) (int, error) {
+func (m *MemStore) MarkAllRead(_ context.Context, partition, userID string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
 	for _, notif := range m.notifs {
-		if ownerMatch(owner, notif.Owner) && notif.UserID == userID && !notif.Read && !notif.Dismissed {
+		if partitionMatch(partition, notif.Partition) && notif.UserID == userID && !notif.Read && !notif.Dismissed {
 			notif.Read = true
 			t := m.now()
 			notif.ReadAt = &t
@@ -187,11 +187,11 @@ func (m *MemStore) MarkAllRead(_ context.Context, owner, userID string) (int, er
 	return n, nil
 }
 
-func (m *MemStore) Dismiss(_ context.Context, owner, userID, id string) error {
+func (m *MemStore) Dismiss(_ context.Context, partition, userID, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n, ok := m.notifs[id]
-	if !ok || !ownerMatch(owner, n.Owner) || n.UserID != userID {
+	if !ok || !partitionMatch(partition, n.Partition) || n.UserID != userID {
 		return ErrNotFound
 	}
 	if !n.Dismissed {
@@ -225,7 +225,7 @@ func (m *MemStore) RegisterToken(_ context.Context, t *DeviceToken) error {
 			e.LastSeenAt = &now
 			e.InvalidatedAt = nil
 			e.UserID = t.UserID
-			e.Owner = t.Owner
+			e.Partition = t.Partition
 			e.Platform = t.Platform
 			e.Provider = t.Provider
 			return nil
@@ -241,12 +241,12 @@ func (m *MemStore) RegisterToken(_ context.Context, t *DeviceToken) error {
 	return nil
 }
 
-func (m *MemStore) ListActiveTokens(_ context.Context, owner, userID string) ([]*DeviceToken, error) {
+func (m *MemStore) ListActiveTokens(_ context.Context, partition, userID string) ([]*DeviceToken, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*DeviceToken
 	for _, t := range m.tokens {
-		if ownerMatch(owner, t.Owner) && t.UserID == userID && t.InvalidatedAt == nil {
+		if partitionMatch(partition, t.Partition) && t.UserID == userID && t.InvalidatedAt == nil {
 			out = append(out, cloneToken(t))
 		}
 	}
@@ -254,11 +254,11 @@ func (m *MemStore) ListActiveTokens(_ context.Context, owner, userID string) ([]
 	return out, nil
 }
 
-func (m *MemStore) InvalidateToken(_ context.Context, owner, token string, at int64) error {
+func (m *MemStore) InvalidateToken(_ context.Context, partition, token string, at int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, t := range m.tokens {
-		if t.Token == token && ownerMatch(owner, t.Owner) {
+		if t.Token == token && partitionMatch(partition, t.Partition) {
 			if t.InvalidatedAt == nil {
 				ts := time.Unix(0, at).UTC()
 				t.InvalidatedAt = &ts
@@ -289,12 +289,12 @@ func (m *MemStore) CleanupStaleTokens(_ context.Context, before int64) (int, err
 
 // ── Preferences ──
 
-func (m *MemStore) GetPreferences(_ context.Context, owner, userID string) ([]*Preference, error) {
+func (m *MemStore) GetPreferences(_ context.Context, partition, userID string) ([]*Preference, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Preference
 	for _, p := range m.prefs {
-		if ownerMatch(owner, p.Owner) && p.UserID == userID {
+		if partitionMatch(partition, p.Partition) && p.UserID == userID {
 			out = append(out, clonePreference(p))
 		}
 	}
@@ -306,7 +306,7 @@ func (m *MemStore) SetPreference(_ context.Context, p *Preference) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.prefs {
-		if e.Owner == p.Owner && e.UserID == p.UserID && e.Category == p.Category {
+		if e.Partition == p.Partition && e.UserID == p.UserID && e.Category == p.Category {
 			e.Channels = cloneBoolMap(p.Channels)
 			e.UpdatedAt = m.now()
 			return nil

@@ -94,7 +94,7 @@ func (n *Notifier) Notify(ctx context.Context, notif *Notification) (deliverErrs
 	if err := n.store.CreateNotification(ctx, notif); err != nil {
 		return nil, err
 	}
-	prefs, err := n.store.GetPreferences(ctx, notif.Owner, notif.UserID)
+	prefs, err := n.store.GetPreferences(ctx, notif.Partition, notif.UserID)
 	if err != nil {
 		return nil, err
 	}
