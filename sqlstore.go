@@ -46,6 +46,17 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			channels TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (partition, user_id, category)
 		)`,
+		`CREATE TABLE IF NOT EXISTS notify_user_events (
+			event_id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL DEFAULT '',
+			event_type TEXT NOT NULL DEFAULT '', source_domain TEXT NOT NULL DEFAULT '',
+			idempotency_key TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+			body TEXT NOT NULL DEFAULT '', action_url TEXT NOT NULL DEFAULT '',
+			payload_json TEXT NOT NULL DEFAULT '{}', channels TEXT NOT NULL DEFAULT '[]',
+			delivered INTEGER NOT NULL DEFAULT 0, subscriber_count INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		// Dedup only for a non-empty idempotency key: an empty key writes a fresh row every call.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_user_events_idem ON notify_user_events(partition, user_id, idempotency_key) WHERE idempotency_key != ''`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {

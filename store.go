@@ -40,4 +40,19 @@ type Store interface {
 	// ── Preferences ──
 	GetPreferences(ctx context.Context, partition, userID string) ([]*Preference, error)
 	SetPreference(ctx context.Context, p *Preference) error
+
+	// ── User events (idempotent publish anchor) ──
+	// RecordUserEvent inserts a user-event dedup row. When IdempotencyKey is
+	// non-empty and the (Partition, UserID, IdempotencyKey) tuple already exists,
+	// it returns the prior row + ErrUserEventAlreadyPublished (an idempotent
+	// replay — surface the cached outcome). An empty key never dedups. It mints
+	// EventID/CreatedAt when unset and returns the stored row.
+	RecordUserEvent(ctx context.Context, e *UserEvent) (*UserEvent, error)
+	// UpdateUserEventOutcome records the post-fan-out result (delivered,
+	// subscriber count, channels actually attempted) on an existing row;
+	// ErrNotFound when the event id is unknown.
+	UpdateUserEventOutcome(ctx context.Context, eventID string, delivered bool, subscriberCount int32, channels []string) error
+	// GetUserEventByIdempotency reads a user event by its dedup tuple; ErrNotFound
+	// when absent.
+	GetUserEventByIdempotency(ctx context.Context, partition, userID, idempotencyKey string) (*UserEvent, error)
 }

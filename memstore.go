@@ -18,6 +18,7 @@ type MemStore struct {
 	notifs map[string]*Notification
 	tokens map[string]*DeviceToken
 	prefs  []*Preference
+	events map[string]*UserEvent // user-event idempotency anchors, keyed by EventID
 	now    func() time.Time
 	newID  func() string
 }
@@ -27,6 +28,7 @@ func NewMemStore() *MemStore {
 	return &MemStore{
 		notifs: map[string]*Notification{},
 		tokens: map[string]*DeviceToken{},
+		events: map[string]*UserEvent{},
 		now:    time.Now,
 		newID:  randomID,
 	}
