@@ -187,7 +187,7 @@ func (s *SQLStore) CreateNotification(ctx context.Context, n *Notification) erro
 
 func (s *SQLStore) GetNotification(ctx context.Context, partition, userID, id string) (*Notification, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+notifCols+` FROM notify_notifications
-		WHERE id = ? AND (? = '' OR partition = ?) AND (? = '' OR user_id = ?)`, id, partition, partition, userID, userID)
+		WHERE id = ? AND (? <> '' AND partition = ?) AND (? = '' OR user_id = ?)`, id, partition, partition, userID, userID)
 	n, err := scanNotif(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -196,7 +196,7 @@ func (s *SQLStore) GetNotification(ctx context.Context, partition, userID, id st
 }
 
 func (s *SQLStore) ListNotifications(ctx context.Context, partition, userID, category string, unreadOnly bool, limit int, cursor string) ([]*Notification, string, error) {
-	where := `(? = '' OR partition = ?) AND user_id = ? AND dismissed = 0 AND (? = '' OR category = ?)`
+	where := `(? <> '' AND partition = ?) AND user_id = ? AND dismissed = 0 AND (? = '' OR category = ?)`
 	args := []any{partition, partition, userID, category, category}
 	if unreadOnly {
 		where += ` AND read = 0`
@@ -243,7 +243,7 @@ func (s *SQLStore) ListNotifications(ctx context.Context, partition, userID, cat
 
 func (s *SQLStore) ListNotificationsSince(ctx context.Context, partition, userID string, since time.Time) ([]*Notification, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+notifCols+` FROM notify_notifications
-		WHERE (? = '' OR partition = ?) AND user_id = ? AND dismissed = 0 AND created_at > ?
+		WHERE (? <> '' AND partition = ?) AND user_id = ? AND dismissed = 0 AND created_at > ?
 		ORDER BY created_at DESC, id DESC`, partition, partition, userID, since.UnixNano())
 	if err != nil {
 		return nil, err
@@ -264,7 +264,7 @@ func (s *SQLStore) UnreadCount(ctx context.Context, partition, userID string) (i
 	var count int
 	var latest sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), MAX(created_at) FROM notify_notifications
-		WHERE (? = '' OR partition = ?) AND user_id = ? AND read = 0 AND dismissed = 0`,
+		WHERE (? <> '' AND partition = ?) AND user_id = ? AND read = 0 AND dismissed = 0`,
 		partition, partition, userID).Scan(&count, &latest)
 	if err != nil {
 		return 0, nil, err
@@ -282,7 +282,7 @@ func (s *SQLStore) MarkRead(ctx context.Context, partition, userID string, ids [
 		args = append(args, id)
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE notify_notifications SET read = 1, read_at = ?
-		WHERE (? = '' OR partition = ?) AND user_id = ? AND read = 0 AND id IN (`+ph+`)`, args...)
+		WHERE (? <> '' AND partition = ?) AND user_id = ? AND read = 0 AND id IN (`+ph+`)`, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -292,7 +292,7 @@ func (s *SQLStore) MarkRead(ctx context.Context, partition, userID string, ids [
 
 func (s *SQLStore) MarkAllRead(ctx context.Context, partition, userID string) (int, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE notify_notifications SET read = 1, read_at = ?
-		WHERE (? = '' OR partition = ?) AND user_id = ? AND read = 0 AND dismissed = 0`,
+		WHERE (? <> '' AND partition = ?) AND user_id = ? AND read = 0 AND dismissed = 0`,
 		time.Now().UnixNano(), partition, partition, userID)
 	if err != nil {
 		return 0, err
@@ -303,7 +303,7 @@ func (s *SQLStore) MarkAllRead(ctx context.Context, partition, userID string) (i
 
 func (s *SQLStore) Dismiss(ctx context.Context, partition, userID, id string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE notify_notifications SET dismissed = 1,
-		dismissed_at = COALESCE(dismissed_at, ?) WHERE id = ? AND (? = '' OR partition = ?) AND user_id = ?`,
+		dismissed_at = COALESCE(dismissed_at, ?) WHERE id = ? AND (? <> '' AND partition = ?) AND user_id = ?`,
 		time.Now().UnixNano(), id, partition, partition, userID)
 	if err != nil {
 		return err
@@ -351,7 +351,7 @@ func (s *SQLStore) RegisterToken(ctx context.Context, t *DeviceToken) error {
 func (s *SQLStore) ListActiveTokens(ctx context.Context, partition, userID string) ([]*DeviceToken, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, partition, user_id, token, platform, provider,
 		created_at, last_seen_at, invalidated_at FROM notify_device_tokens
-		WHERE (? = '' OR partition = ?) AND user_id = ? AND invalidated_at IS NULL ORDER BY created_at ASC`,
+		WHERE (? <> '' AND partition = ?) AND user_id = ? AND invalidated_at IS NULL ORDER BY created_at ASC`,
 		partition, partition, userID)
 	if err != nil {
 		return nil, err
@@ -376,7 +376,7 @@ func (s *SQLStore) ListActiveTokens(ctx context.Context, partition, userID strin
 
 func (s *SQLStore) InvalidateToken(ctx context.Context, partition, token string, at int64) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE notify_device_tokens
-		SET invalidated_at = COALESCE(invalidated_at, ?) WHERE token = ? AND (? = '' OR partition = ?)`,
+		SET invalidated_at = COALESCE(invalidated_at, ?) WHERE token = ? AND (? <> '' AND partition = ?)`,
 		at, token, partition, partition)
 	if err != nil {
 		return err
@@ -401,7 +401,7 @@ func (s *SQLStore) CleanupStaleTokens(ctx context.Context, before int64) (int, e
 
 func (s *SQLStore) GetPreferences(ctx context.Context, partition, userID string) ([]*Preference, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT partition, user_id, category, channels, updated_at
-		FROM notify_preferences WHERE (? = '' OR partition = ?) AND user_id = ? ORDER BY category ASC`,
+		FROM notify_preferences WHERE (? <> '' AND partition = ?) AND user_id = ? ORDER BY category ASC`,
 		partition, partition, userID)
 	if err != nil {
 		return nil, err

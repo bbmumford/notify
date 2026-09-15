@@ -200,3 +200,50 @@ func TestNotifier_SinkFailureDoesNotLoseInApp(t *testing.T) {
 		}
 	})
 }
+
+// TestNotifications_EmptyPartitionReachesNothing pins the partition boundary on a
+// user's inbox. An empty partition used to drop the partition predicate, so a
+// caller that left the field unset read and mutated notifications belonging to any
+// partition — and safety rested entirely on one caller checking first.
+//
+// It compares three outcomes rather than checking each call against what that call
+// expected: the owning partition reads its notification, a wrong one and an empty
+// one do not, and the empty one must not behave like the owning one. Asserting only
+// that the intended call worked cannot tell a working filter from one that admits
+// everyone.
+func TestNotifications_EmptyPartitionReachesNothing(t *testing.T) {
+	eachStore(t, func(t *testing.T, s Store) {
+		n := &Notification{Partition: "acme", UserID: "u1", Category: "billing", Title: "Invoice", Body: "due", CreatedAt: at}
+		if err := s.CreateNotification(ctx, n); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		if _, err := s.GetNotification(ctx, "acme", "u1", n.ID); err != nil {
+			t.Fatalf("the owning partition must read its own notification: %v", err)
+		}
+		if _, err := s.GetNotification(ctx, "", "u1", n.ID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("an empty partition must not read the notification, got %v", err)
+		}
+
+		mine, _, _ := s.UnreadCount(ctx, "acme", "u1")
+		blind, _, _ := s.UnreadCount(ctx, "", "u1")
+		if mine != 1 {
+			t.Fatalf("the owning partition must count its unread, got %d", mine)
+		}
+		if blind != 0 {
+			t.Fatalf("an empty partition must count nothing, got %d", blind)
+		}
+		if blind == mine {
+			t.Fatal("an empty partition counted what the owning partition counts; the predicate admits everyone")
+		}
+
+		// The mutate half: marking another partition's notification read is a write
+		// across the boundary, so it is asserted separately from the reads.
+		if marked, err := s.MarkAllRead(ctx, "", "u1"); err == nil && marked > 0 {
+			t.Fatalf("an empty partition marked %d of another partition's notifications read", marked)
+		}
+		if marked, err := s.MarkAllRead(ctx, "acme", "u1"); err != nil || marked != 1 {
+			t.Fatalf("the owning partition must mark its own read, got %d err=%v", marked, err)
+		}
+	})
+}
