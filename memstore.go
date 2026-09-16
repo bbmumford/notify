@@ -11,8 +11,9 @@ import (
 )
 
 // MemStore is the in-memory reference Store — the test/dev backend and the semantic reference a durable
-// (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Partition is opaque; "" on an
-// partition-scoped read means any partition.
+// (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Partition is opaque; "" on a
+// partition-scoped read matches nothing — see partitionMatch, which the durable store's predicates
+// are held to.
 type MemStore struct {
 	mu     sync.Mutex
 	notifs map[string]*Notification

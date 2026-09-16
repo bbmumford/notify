@@ -12,7 +12,8 @@ import (
 // SQLStore is the durable default Store over any database/sql driver — the shipped standalone store. The
 // package imports only database/sql (stdlib); the APP supplies the opened *sql.DB and registers the
 // driver, so notify pulls no driver dependency yet works out of the box. Partition is an opaque column the
-// store filters on but never interprets ("" matches any partition). Times persist as INTEGER Unix nanos with
+// store filters on but never interprets ("" matches nothing: the predicates read
+// (? <> '' AND partition = ?)). Times persist as INTEGER Unix nanos with
 // NULL for an unset *time.Time; metadata/delivered_via/channels persist as JSON.
 type SQLStore struct{ db *sql.DB }
 

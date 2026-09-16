@@ -10,8 +10,11 @@ import (
 var ErrNotFound = errors.New("notify: not found")
 
 // Store is the persistence contract: notifications, push device tokens, and channel preferences. The
-// Partition is opaque and the store filters on it, never interprets it; an empty partition ("") on an
-// partition-scoped read means "any partition" (the admin/all-scope view). A consumer supplies a *sql.DB store
+// Partition is opaque and the store filters on it, never interprets it; an empty partition ("") on a
+// partition-scoped read matches NOTHING — the predicates read (? <> '' AND partition = ?), so an
+// unscoped read returns no rows rather than every partition's. A blank partition that matched everything
+// would read another partition's notifications and device tokens. There is no unscoped read; a caller
+// that must cross partitions names the partition it means. A consumer supplies a *sql.DB store
 // (the shipped default), a mesh-RPC gateway, or the reference MemStore.
 type Store interface {
 	// ── Notifications ──
