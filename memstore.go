@@ -46,7 +46,7 @@ func randomID() string {
 // lookup in this store filters through it.
 //
 // An empty `want` names no partition and matches nothing. SQLStore answers the same
-// way — its predicates read (? <> '' AND partition = ?) — and the two have to agree,
+// way — its predicates read (? <> ” AND partition = ?) — and the two have to agree,
 // because a test written against this store is what certifies the other's behaviour.
 // The category filter beside it keeps empty-meaning-any: it narrows a result set
 // inside one partition and carries no authority.
@@ -67,20 +67,20 @@ func (m *MemStore) CreateNotification(_ context.Context, n *Notification) error 
 	return nil
 }
 
-func (m *MemStore) GetNotification(_ context.Context, partition, userID, id string) (*Notification, error) {
+func (m *MemStore) GetNotification(_ context.Context, partition, subject, id string) (*Notification, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n, ok := m.notifs[id]
-	if !ok || !partitionMatch(partition, n.Partition) || (userID != "" && n.UserID != userID) {
+	if !ok || !partitionMatch(partition, n.Partition) || (subject != "" && n.Subject != subject) {
 		return nil, ErrNotFound
 	}
 	return cloneNotification(n), nil
 }
 
-func (m *MemStore) userNotifs(partition, userID string) []*Notification {
+func (m *MemStore) subjectNotifs(partition, subject string) []*Notification {
 	var out []*Notification
 	for _, n := range m.notifs {
-		if partitionMatch(partition, n.Partition) && n.UserID == userID {
+		if partitionMatch(partition, n.Partition) && n.Subject == subject {
 			out = append(out, n)
 		}
 	}
@@ -94,10 +94,10 @@ func (m *MemStore) userNotifs(partition, userID string) []*Notification {
 	return out
 }
 
-func (m *MemStore) ListNotifications(_ context.Context, partition, userID, category string, unreadOnly bool, limit int, cursor string) ([]*Notification, string, error) {
+func (m *MemStore) ListNotifications(_ context.Context, partition, subject, category string, unreadOnly bool, limit int, cursor string) ([]*Notification, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	all := m.userNotifs(partition, userID)
+	all := m.subjectNotifs(partition, subject)
 	var filtered []*Notification
 	for _, n := range all {
 		if n.Dismissed {
@@ -134,11 +134,11 @@ func (m *MemStore) ListNotifications(_ context.Context, partition, userID, categ
 	return out, next, nil
 }
 
-func (m *MemStore) ListNotificationsSince(_ context.Context, partition, userID string, since time.Time) ([]*Notification, error) {
+func (m *MemStore) ListNotificationsSince(_ context.Context, partition, subject string, since time.Time) ([]*Notification, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Notification
-	for _, n := range m.userNotifs(partition, userID) {
+	for _, n := range m.subjectNotifs(partition, subject) {
 		if n.Dismissed || !n.CreatedAt.After(since) {
 			continue
 		}
@@ -147,12 +147,12 @@ func (m *MemStore) ListNotificationsSince(_ context.Context, partition, userID s
 	return out, nil
 }
 
-func (m *MemStore) UnreadCount(_ context.Context, partition, userID string) (int, *time.Time, error) {
+func (m *MemStore) UnreadCount(_ context.Context, partition, subject string) (int, *time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	count := 0
 	var latest *time.Time
-	for _, n := range m.userNotifs(partition, userID) {
+	for _, n := range m.subjectNotifs(partition, subject) {
 		if n.Read || n.Dismissed {
 			continue
 		}
@@ -165,7 +165,7 @@ func (m *MemStore) UnreadCount(_ context.Context, partition, userID string) (int
 	return count, latest, nil
 }
 
-func (m *MemStore) MarkRead(_ context.Context, partition, userID string, ids []string) (int, error) {
+func (m *MemStore) MarkRead(_ context.Context, partition, subject string, ids []string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	want := map[string]bool{}
@@ -174,7 +174,7 @@ func (m *MemStore) MarkRead(_ context.Context, partition, userID string, ids []s
 	}
 	n := 0
 	for _, notif := range m.notifs {
-		if want[notif.ID] && partitionMatch(partition, notif.Partition) && notif.UserID == userID && !notif.Read {
+		if want[notif.ID] && partitionMatch(partition, notif.Partition) && notif.Subject == subject && !notif.Read {
 			notif.Read = true
 			t := m.now()
 			notif.ReadAt = &t
@@ -184,12 +184,12 @@ func (m *MemStore) MarkRead(_ context.Context, partition, userID string, ids []s
 	return n, nil
 }
 
-func (m *MemStore) MarkAllRead(_ context.Context, partition, userID string) (int, error) {
+func (m *MemStore) MarkAllRead(_ context.Context, partition, subject string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
 	for _, notif := range m.notifs {
-		if partitionMatch(partition, notif.Partition) && notif.UserID == userID && !notif.Read && !notif.Dismissed {
+		if partitionMatch(partition, notif.Partition) && notif.Subject == subject && !notif.Read && !notif.Dismissed {
 			notif.Read = true
 			t := m.now()
 			notif.ReadAt = &t
@@ -199,11 +199,11 @@ func (m *MemStore) MarkAllRead(_ context.Context, partition, userID string) (int
 	return n, nil
 }
 
-func (m *MemStore) Dismiss(_ context.Context, partition, userID, id string) error {
+func (m *MemStore) Dismiss(_ context.Context, partition, subject, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n, ok := m.notifs[id]
-	if !ok || !partitionMatch(partition, n.Partition) || n.UserID != userID {
+	if !ok || !partitionMatch(partition, n.Partition) || n.Subject != subject {
 		return ErrNotFound
 	}
 	if !n.Dismissed {
@@ -236,7 +236,7 @@ func (m *MemStore) RegisterToken(_ context.Context, t *DeviceToken) error {
 			now := m.now()
 			e.LastSeenAt = &now
 			e.InvalidatedAt = nil
-			e.UserID = t.UserID
+			e.Subject = t.Subject
 			e.Partition = t.Partition
 			e.Platform = t.Platform
 			e.Provider = t.Provider
@@ -253,12 +253,12 @@ func (m *MemStore) RegisterToken(_ context.Context, t *DeviceToken) error {
 	return nil
 }
 
-func (m *MemStore) ListActiveTokens(_ context.Context, partition, userID string) ([]*DeviceToken, error) {
+func (m *MemStore) ListActiveTokens(_ context.Context, partition, subject string) ([]*DeviceToken, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*DeviceToken
 	for _, t := range m.tokens {
-		if partitionMatch(partition, t.Partition) && t.UserID == userID && t.InvalidatedAt == nil {
+		if partitionMatch(partition, t.Partition) && t.Subject == subject && t.InvalidatedAt == nil {
 			out = append(out, cloneToken(t))
 		}
 	}
@@ -301,12 +301,12 @@ func (m *MemStore) CleanupStaleTokens(_ context.Context, before int64) (int, err
 
 // ── Preferences ──
 
-func (m *MemStore) GetPreferences(_ context.Context, partition, userID string) ([]*Preference, error) {
+func (m *MemStore) GetPreferences(_ context.Context, partition, subject string) ([]*Preference, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Preference
 	for _, p := range m.prefs {
-		if partitionMatch(partition, p.Partition) && p.UserID == userID {
+		if partitionMatch(partition, p.Partition) && p.Subject == subject {
 			out = append(out, clonePreference(p))
 		}
 	}
@@ -318,7 +318,7 @@ func (m *MemStore) SetPreference(_ context.Context, p *Preference) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.prefs {
-		if e.Partition == p.Partition && e.UserID == p.UserID && e.Category == p.Category {
+		if e.Partition == p.Partition && e.Subject == p.Subject && e.Category == p.Category {
 			e.Channels = cloneBoolMap(p.Channels)
 			e.UpdatedAt = m.now()
 			return nil

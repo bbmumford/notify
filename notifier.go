@@ -13,7 +13,7 @@ type Sink interface {
 	Deliver(ctx context.Context, n *Notification) error
 }
 
-// EffectiveChannels resolves which opaque channels a category should deliver on, given a user's
+// EffectiveChannels resolves which opaque channels a category should deliver on, given a subject's
 // preferences. An exact-category preference wins; else the "*" default preference; else the supplied
 // defaultChannels. Only channels whose preference is true are returned (a preference present but false
 // suppresses that channel). This is the source's per-category resolution, generalised to opaque channels.
@@ -43,9 +43,9 @@ func EffectiveChannels(prefs []*Preference, category string, defaultChannels []s
 	return out
 }
 
-// Notifier persists a notification and fans it out to the pluggable Sinks matching the user's effective
+// Notifier persists a notification and fans it out to the pluggable Sinks matching the subject's effective
 // channels. It always records the in-app notification (the store IS the in-app channel); other channels
-// deliver only if a Sink is registered for them and the user's preferences admit them. The channels
+// deliver only if a Sink is registered for them and the subject's preferences admit them. The channels
 // actually delivered (including "in_app") are recorded back on the notification via SetDeliveredVia.
 type Notifier struct {
 	store    Store
@@ -54,7 +54,7 @@ type Notifier struct {
 	now      func() time.Time
 }
 
-// NotifierConfig wires a Notifier. Store is required. DefaultChannels apply when a user has no
+// NotifierConfig wires a Notifier. Store is required. DefaultChannels apply when a subject has no
 // preference for a category (an empty list means in-app only). Sinks are registered by their Channel().
 type NotifierConfig struct {
 	Store           Store
@@ -94,7 +94,7 @@ func (n *Notifier) Notify(ctx context.Context, notif *Notification) (deliverErrs
 	if err := n.store.CreateNotification(ctx, notif); err != nil {
 		return nil, err
 	}
-	prefs, err := n.store.GetPreferences(ctx, notif.Partition, notif.UserID)
+	prefs, err := n.store.GetPreferences(ctx, notif.Partition, notif.Subject)
 	if err != nil {
 		return nil, err
 	}

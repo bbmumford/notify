@@ -10,7 +10,7 @@ func TestUserEvent_RecordAndGet(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		ctx := context.Background()
 		got, err := s.RecordUserEvent(ctx, &UserEvent{
-			Partition: "p1", UserID: "u1", EventType: "welcome", IdempotencyKey: "k1",
+			Partition: "p1", Subject: "u1", EventType: "welcome", IdempotencyKey: "k1",
 			Title: "Hi", Body: "b", Channels: []string{"in_app", "email"},
 		})
 		if err != nil {
@@ -33,11 +33,11 @@ func TestUserEvent_RecordAndGet(t *testing.T) {
 func TestUserEvent_IdempotentReplay(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		ctx := context.Background()
-		first, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", UserID: "u1", EventType: "e", IdempotencyKey: "dup"})
+		first, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", Subject: "u1", EventType: "e", IdempotencyKey: "dup"})
 		if err != nil {
 			t.Fatalf("first: %v", err)
 		}
-		again, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", UserID: "u1", EventType: "e", IdempotencyKey: "dup", Title: "different"})
+		again, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", Subject: "u1", EventType: "e", IdempotencyKey: "dup", Title: "different"})
 		if !errors.Is(err, ErrUserEventAlreadyPublished) {
 			t.Fatalf("want ErrUserEventAlreadyPublished, got %v", err)
 		}
@@ -51,11 +51,11 @@ func TestUserEvent_IdempotentReplay(t *testing.T) {
 func TestUserEvent_EmptyKeyNeverDedups(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		ctx := context.Background()
-		a, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", UserID: "u1", EventType: "e"})
+		a, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", Subject: "u1", EventType: "e"})
 		if err != nil {
 			t.Fatalf("a: %v", err)
 		}
-		b, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", UserID: "u1", EventType: "e"})
+		b, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", Subject: "u1", EventType: "e"})
 		if err != nil {
 			t.Fatalf("b: %v", err)
 		}
@@ -68,7 +68,7 @@ func TestUserEvent_EmptyKeyNeverDedups(t *testing.T) {
 func TestUserEvent_UpdateOutcome(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		ctx := context.Background()
-		ev, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", UserID: "u1", EventType: "e", IdempotencyKey: "k"})
+		ev, err := s.RecordUserEvent(ctx, &UserEvent{Partition: "p1", Subject: "u1", EventType: "e", IdempotencyKey: "k"})
 		if err != nil {
 			t.Fatalf("record: %v", err)
 		}
@@ -100,9 +100,9 @@ func TestUserEvent_Validation(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		ctx := context.Background()
 		for _, e := range []*UserEvent{
-			{UserID: "u", EventType: "e"},    // no partition
+			{Subject: "u", EventType: "e"},   // no partition
 			{Partition: "p", EventType: "e"}, // no user
-			{Partition: "p", UserID: "u"},    // no event type
+			{Partition: "p", Subject: "u"},   // no event type
 		} {
 			if _, err := s.RecordUserEvent(ctx, e); err == nil {
 				t.Fatalf("incomplete event should fail: %+v", e)

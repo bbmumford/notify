@@ -14,16 +14,16 @@ var at = time.Unix(1_000_000, 0).UTC()
 
 func TestNotifications_LifecycleAndPartitionScope(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		n := &Notification{Partition: "acme", UserID: "u1", Category: "billing", Title: "Invoice", Body: "due", CreatedAt: at}
+		n := &Notification{Partition: "acme", Subject: "u1", Category: "billing", Title: "Invoice", Body: "due", CreatedAt: at}
 		if err := s.CreateNotification(ctx, n); err != nil || n.ID == "" {
 			t.Fatalf("create: %v", err)
 		}
-		// partition + user scoping on get
+		// partition + subject scoping on get
 		if _, err := s.GetNotification(ctx, "globex", "u1", n.ID); !errors.Is(err, ErrNotFound) {
 			t.Fatal("a different partition must not see the notification")
 		}
 		if _, err := s.GetNotification(ctx, "acme", "u2", n.ID); !errors.Is(err, ErrNotFound) {
-			t.Fatal("a different user must not see the notification")
+			t.Fatal("a different subject must not see the notification")
 		}
 		if c, latest, _ := s.UnreadCount(ctx, "acme", "u1"); c != 1 || latest == nil {
 			t.Fatalf("unread count: %d latest=%v", c, latest)
@@ -50,7 +50,7 @@ func TestNotifications_LifecycleAndPartitionScope(t *testing.T) {
 func TestNotifications_ListFilterPagingSince(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		for i, cat := range []string{"a", "b", "a", "b", "a"} {
-			n := &Notification{Partition: "acme", UserID: "u1", Category: cat, Title: cat, CreatedAt: at.Add(time.Duration(i) * time.Second)}
+			n := &Notification{Partition: "acme", Subject: "u1", Category: cat, Title: cat, CreatedAt: at.Add(time.Duration(i) * time.Second)}
 			s.CreateNotification(ctx, n)
 		}
 		if page, _, _ := s.ListNotifications(ctx, "acme", "u1", "a", false, 0, ""); len(page) != 3 {
@@ -83,9 +83,9 @@ func TestNotifications_ListFilterPagingSince(t *testing.T) {
 
 func TestDeviceTokens_RegisterActiveInvalidateCleanup(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		s.RegisterToken(ctx, &DeviceToken{Partition: "acme", UserID: "u1", Token: "tok-1", Platform: "ios", CreatedAt: at})
+		s.RegisterToken(ctx, &DeviceToken{Partition: "acme", Subject: "u1", Token: "tok-1", Platform: "ios", CreatedAt: at})
 		// re-register the same token refreshes rather than duplicating
-		s.RegisterToken(ctx, &DeviceToken{Partition: "acme", UserID: "u1", Token: "tok-1", Platform: "ios", CreatedAt: at})
+		s.RegisterToken(ctx, &DeviceToken{Partition: "acme", Subject: "u1", Token: "tok-1", Platform: "ios", CreatedAt: at})
 		if toks, _ := s.ListActiveTokens(ctx, "acme", "u1"); len(toks) != 1 {
 			t.Fatalf("re-register must not duplicate; got %d", len(toks))
 		}
@@ -93,7 +93,7 @@ func TestDeviceTokens_RegisterActiveInvalidateCleanup(t *testing.T) {
 		if toks, _ := s.ListActiveTokens(ctx, "acme", "u1"); len(toks) != 0 {
 			t.Fatalf("invalidated token must not be active; got %d", len(toks))
 		}
-		s.RegisterToken(ctx, &DeviceToken{Partition: "acme", UserID: "u1", Token: "tok-2", Platform: "ios", CreatedAt: at})
+		s.RegisterToken(ctx, &DeviceToken{Partition: "acme", Subject: "u1", Token: "tok-2", Platform: "ios", CreatedAt: at})
 		if err := s.InvalidateToken(ctx, "globex", "tok-2", at.UnixNano()); !errors.Is(err, ErrNotFound) {
 			t.Fatal("a different partition must not invalidate the token")
 		}
@@ -107,10 +107,10 @@ func TestDeviceTokens_RegisterActiveInvalidateCleanup(t *testing.T) {
 
 func TestPreferences_SetGetAndEffectiveChannels(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		s.SetPreference(ctx, &Preference{Partition: "acme", UserID: "u1", Category: "billing", Channels: map[string]bool{"in_app": true, "email": true, "push": false}})
-		s.SetPreference(ctx, &Preference{Partition: "acme", UserID: "u1", Category: "*", Channels: map[string]bool{"in_app": true}})
+		s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "billing", Channels: map[string]bool{"in_app": true, "email": true, "push": false}})
+		s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "*", Channels: map[string]bool{"in_app": true}})
 		// overwrite is idempotent (no duplicate rows)
-		s.SetPreference(ctx, &Preference{Partition: "acme", UserID: "u1", Category: "billing", Channels: map[string]bool{"in_app": true, "email": true}})
+		s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "billing", Channels: map[string]bool{"in_app": true, "email": true}})
 		prefs, _ := s.GetPreferences(ctx, "acme", "u1")
 		if len(prefs) != 2 {
 			t.Fatalf("expected 2 preference rows (billing, *); got %d", len(prefs))
@@ -155,14 +155,14 @@ func (r *recordingSink) Deliver(_ context.Context, n *Notification) error {
 
 func TestNotifier_FanOutRespectsPreferencesAndSinks(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		s.SetPreference(ctx, &Preference{Partition: "acme", UserID: "u1", Category: "billing", Channels: map[string]bool{"in_app": true, "email": true}})
+		s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "billing", Channels: map[string]bool{"in_app": true, "email": true}})
 		email := &recordingSink{channel: "email"}
 		push := &recordingSink{channel: "push"}
 		nf, err := NewNotifier(NotifierConfig{Store: s, Sinks: []Sink{email, push}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		n := &Notification{Partition: "acme", UserID: "u1", Category: "billing", Title: "Invoice", CreatedAt: at}
+		n := &Notification{Partition: "acme", Subject: "u1", Category: "billing", Title: "Invoice", CreatedAt: at}
 		errs, err := nf.Notify(ctx, n)
 		if err != nil || len(errs) != 0 {
 			t.Fatalf("notify: err=%v deliverErrs=%v", err, errs)
@@ -181,10 +181,10 @@ func TestNotifier_FanOutRespectsPreferencesAndSinks(t *testing.T) {
 
 func TestNotifier_SinkFailureDoesNotLoseInApp(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		s.SetPreference(ctx, &Preference{Partition: "acme", UserID: "u1", Category: "*", Channels: map[string]bool{"in_app": true, "email": true}})
+		s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "*", Channels: map[string]bool{"in_app": true, "email": true}})
 		email := &recordingSink{channel: "email", failWith: errors.New("smtp down")}
 		nf, _ := NewNotifier(NotifierConfig{Store: s, Sinks: []Sink{email}})
-		n := &Notification{Partition: "acme", UserID: "u1", Category: "alerts", Title: "Alert", CreatedAt: at}
+		n := &Notification{Partition: "acme", Subject: "u1", Category: "alerts", Title: "Alert", CreatedAt: at}
 		errs, err := nf.Notify(ctx, n)
 		if err != nil {
 			t.Fatalf("a sink failure must not fail the whole Notify: %v", err)
@@ -202,9 +202,9 @@ func TestNotifier_SinkFailureDoesNotLoseInApp(t *testing.T) {
 }
 
 // TestNotifications_EmptyPartitionReachesNothing pins the partition boundary on a
-// user's inbox. An empty partition used to drop the partition predicate, so a
-// caller that left the field unset read and mutated notifications belonging to any
-// partition — and safety rested entirely on one caller checking first.
+// subject's inbox. Every partition-scoped predicate requires the partition value to be
+// non-empty before it matches, so a caller that leaves the field unset reaches no row at
+// all rather than any partition's — the boundary does not rest on one caller checking first.
 //
 // It compares three outcomes rather than checking each call against what that call
 // expected: the owning partition reads its notification, a wrong one and an empty
@@ -213,7 +213,7 @@ func TestNotifier_SinkFailureDoesNotLoseInApp(t *testing.T) {
 // everyone.
 func TestNotifications_EmptyPartitionReachesNothing(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		n := &Notification{Partition: "acme", UserID: "u1", Category: "billing", Title: "Invoice", Body: "due", CreatedAt: at}
+		n := &Notification{Partition: "acme", Subject: "u1", Category: "billing", Title: "Invoice", Body: "due", CreatedAt: at}
 		if err := s.CreateNotification(ctx, n); err != nil {
 			t.Fatalf("create: %v", err)
 		}

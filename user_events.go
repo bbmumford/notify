@@ -8,7 +8,7 @@ import (
 )
 
 // UserEvent is the persisted anchor of a published user event — the idempotency
-// record a publish writes before fan-out. The (Partition, UserID, IdempotencyKey)
+// record a publish writes before fan-out. The (Partition, Subject, IdempotencyKey)
 // tuple dedups a retried publish: a repeat with the same NON-EMPTY key returns the
 // stored row + ErrUserEventAlreadyPublished instead of fanning again, so
 // at-least-once delivery is safe and observable. Channels + the delivery outcome
@@ -18,7 +18,7 @@ import (
 type UserEvent struct {
 	EventID         string
 	Partition       string
-	UserID          string
+	Subject         string
 	EventType       string
 	SourceDomain    string
 	IdempotencyKey  string
@@ -33,7 +33,7 @@ type UserEvent struct {
 }
 
 // ErrUserEventAlreadyPublished is returned by RecordUserEvent when the
-// (partition, user_id, idempotency_key) tuple already exists. A caller MUST treat
+// (partition, subject, idempotency_key) tuple already exists. A caller MUST treat
 // it as an idempotent replay and surface the returned row's cached outcome.
 var ErrUserEventAlreadyPublished = errors.New("notify: user event already published")
 
@@ -48,14 +48,14 @@ func cloneUserEvent(e *UserEvent) *UserEvent {
 // ── MemStore ──
 
 func (m *MemStore) RecordUserEvent(_ context.Context, e *UserEvent) (*UserEvent, error) {
-	if e.Partition == "" || e.UserID == "" || e.EventType == "" {
-		return nil, errors.New("notify: partition, user_id, event_type are required")
+	if e.Partition == "" || e.Subject == "" || e.EventType == "" {
+		return nil, errors.New("notify: partition, subject, event_type are required")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e.IdempotencyKey != "" {
 		for _, ex := range m.events {
-			if ex.Partition == e.Partition && ex.UserID == e.UserID && ex.IdempotencyKey == e.IdempotencyKey {
+			if ex.Partition == e.Partition && ex.Subject == e.Subject && ex.IdempotencyKey == e.IdempotencyKey {
 				return cloneUserEvent(ex), ErrUserEventAlreadyPublished
 			}
 		}
@@ -85,11 +85,11 @@ func (m *MemStore) UpdateUserEventOutcome(_ context.Context, eventID string, del
 	return nil
 }
 
-func (m *MemStore) GetUserEventByIdempotency(_ context.Context, partition, userID, idempotencyKey string) (*UserEvent, error) {
+func (m *MemStore) GetUserEventByIdempotency(_ context.Context, partition, subject, idempotencyKey string) (*UserEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, ex := range m.events {
-		if ex.Partition == partition && ex.UserID == userID && ex.IdempotencyKey == idempotencyKey {
+		if ex.Partition == partition && ex.Subject == subject && ex.IdempotencyKey == idempotencyKey {
 			return cloneUserEvent(ex), nil
 		}
 	}
@@ -99,11 +99,11 @@ func (m *MemStore) GetUserEventByIdempotency(_ context.Context, partition, userI
 // ── SQLStore ──
 
 func (s *SQLStore) RecordUserEvent(ctx context.Context, e *UserEvent) (*UserEvent, error) {
-	if e.Partition == "" || e.UserID == "" || e.EventType == "" {
-		return nil, errors.New("notify: partition, user_id, event_type are required")
+	if e.Partition == "" || e.Subject == "" || e.EventType == "" {
+		return nil, errors.New("notify: partition, subject, event_type are required")
 	}
 	if e.IdempotencyKey != "" {
-		existing, err := s.GetUserEventByIdempotency(ctx, e.Partition, e.UserID, e.IdempotencyKey)
+		existing, err := s.GetUserEventByIdempotency(ctx, e.Partition, e.Subject, e.IdempotencyKey)
 		if err == nil {
 			return existing, ErrUserEventAlreadyPublished
 		} else if !errors.Is(err, ErrNotFound) {
@@ -117,17 +117,17 @@ func (s *SQLStore) RecordUserEvent(ctx context.Context, e *UserEvent) (*UserEven
 		e.CreatedAt = time.Now().Unix()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO notify_user_events
-		(event_id, partition, user_id, event_type, source_domain, idempotency_key,
+		(event_id, partition, subject, event_type, source_domain, idempotency_key,
 		 title, body, action_url, payload_json, channels, delivered, subscriber_count, created_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		e.EventID, e.Partition, e.UserID, e.EventType, e.SourceDomain, e.IdempotencyKey,
+		e.EventID, e.Partition, e.Subject, e.EventType, e.SourceDomain, e.IdempotencyKey,
 		e.Title, e.Body, e.ActionURL, e.PayloadJSON, jsonSliceS(e.Channels),
 		boolInt(e.Delivered), e.SubscriberCount, e.CreatedAt)
 	if err != nil {
 		// Race: a concurrent insert won the unique (partition,user,idempotency_key).
 		// Return the winner's row as an idempotent replay rather than the raw error.
 		if e.IdempotencyKey != "" {
-			if winner, gerr := s.GetUserEventByIdempotency(ctx, e.Partition, e.UserID, e.IdempotencyKey); gerr == nil {
+			if winner, gerr := s.GetUserEventByIdempotency(ctx, e.Partition, e.Subject, e.IdempotencyKey); gerr == nil {
 				return winner, ErrUserEventAlreadyPublished
 			}
 		}
@@ -149,18 +149,18 @@ func (s *SQLStore) UpdateUserEventOutcome(ctx context.Context, eventID string, d
 	return nil
 }
 
-func (s *SQLStore) GetUserEventByIdempotency(ctx context.Context, partition, userID, idempotencyKey string) (*UserEvent, error) {
+func (s *SQLStore) GetUserEventByIdempotency(ctx context.Context, partition, subject, idempotencyKey string) (*UserEvent, error) {
 	var (
 		e            UserEvent
 		channels     string
 		deliveredInt int
 	)
 	err := s.db.QueryRowContext(ctx, `SELECT
-		event_id, partition, user_id, event_type, source_domain, idempotency_key,
+		event_id, partition, subject, event_type, source_domain, idempotency_key,
 		title, body, action_url, payload_json, channels, delivered, subscriber_count, created_at
-		FROM notify_user_events WHERE partition = ? AND user_id = ? AND idempotency_key = ? LIMIT 1`,
-		partition, userID, idempotencyKey).Scan(
-		&e.EventID, &e.Partition, &e.UserID, &e.EventType, &e.SourceDomain, &e.IdempotencyKey,
+		FROM notify_user_events WHERE partition = ? AND subject = ? AND idempotency_key = ? LIMIT 1`,
+		partition, subject, idempotencyKey).Scan(
+		&e.EventID, &e.Partition, &e.Subject, &e.EventType, &e.SourceDomain, &e.IdempotencyKey,
 		&e.Title, &e.Body, &e.ActionURL, &e.PayloadJSON, &channels, &deliveredInt, &e.SubscriberCount, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
