@@ -17,7 +17,7 @@ func TestUserEvent_RecordAndGet(t *testing.T) {
 			t.Fatalf("RecordUserEvent: %v", err)
 		}
 		if got.EventID == "" || got.CreatedAt == 0 {
-			t.Fatalf("event id/created_at not minted: %+v", got)
+			t.Fatalf("event id/createdAt not minted: %+v", got)
 		}
 		read, err := s.GetUserEventByIdempotency(ctx, "p1", "u1", "k1")
 		if err != nil {

@@ -14,7 +14,7 @@ import (
 // driver, so notify pulls no driver dependency yet works out of the box. Partition is an opaque column the
 // store filters on but never interprets ("" matches nothing: the predicates read
 // (? <> ” AND partition = ?)). Times persist as INTEGER Unix nanos with
-// NULL for an unset *time.Time; metadata/delivered_via/channels persist as JSON.
+// NULL for an unset *time.Time; metadata/deliveredVia/channels persist as JSON.
 type SQLStore struct{ db *sql.DB }
 
 // NewSQLStore builds a store over an opened *sql.DB. Call InitSchema once before use.
@@ -25,39 +25,39 @@ var _ Store = (*SQLStore)(nil)
 // InitSchema creates the tables + indexes (idempotent); run once at boot.
 func (s *SQLStore) InitSchema(ctx context.Context) error {
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS notify_notifications (
+		`CREATE TABLE IF NOT EXISTS notifyNotifications (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
 			category TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '',
-			priority TEXT NOT NULL DEFAULT '', action_url TEXT NOT NULL DEFAULT '',
-			source TEXT NOT NULL DEFAULT '', source_entity TEXT NOT NULL DEFAULT '',
+			priority TEXT NOT NULL DEFAULT '', actionUrl TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '', sourceEntity TEXT NOT NULL DEFAULT '',
 			metadata TEXT NOT NULL DEFAULT '{}', read INTEGER NOT NULL DEFAULT 0,
-			dismissed INTEGER NOT NULL DEFAULT 0, delivered_via TEXT NOT NULL DEFAULT '[]',
-			created_at INTEGER NOT NULL DEFAULT 0, read_at INTEGER, dismissed_at INTEGER
+			dismissed INTEGER NOT NULL DEFAULT 0, deliveredVia TEXT NOT NULL DEFAULT '[]',
+			createdAt INTEGER NOT NULL DEFAULT 0, readAt INTEGER, dismissedAt INTEGER
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_notify_notifs_subject ON notify_notifications(partition, subject, created_at)`,
-		`CREATE TABLE IF NOT EXISTS notify_device_tokens (
+		`CREATE INDEX IF NOT EXISTS idxNotifyNotifsSubject ON notifyNotifications(partition, subject, createdAt)`,
+		`CREATE TABLE IF NOT EXISTS notifyDeviceTokens (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
 			token TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '',
-			created_at INTEGER NOT NULL DEFAULT 0, last_seen_at INTEGER, invalidated_at INTEGER
+			createdAt INTEGER NOT NULL DEFAULT 0, lastSeenAt INTEGER, invalidatedAt INTEGER
 		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_tokens_token ON notify_device_tokens(token)`,
-		`CREATE INDEX IF NOT EXISTS idx_notify_tokens_subject ON notify_device_tokens(partition, subject)`,
-		`CREATE TABLE IF NOT EXISTS notify_preferences (
+		`CREATE UNIQUE INDEX IF NOT EXISTS idxNotifyTokensToken ON notifyDeviceTokens(token)`,
+		`CREATE INDEX IF NOT EXISTS idxNotifyTokensSubject ON notifyDeviceTokens(partition, subject)`,
+		`CREATE TABLE IF NOT EXISTS notifyPreferences (
 			partition TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
-			channels TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL DEFAULT 0,
+			channels TEXT NOT NULL DEFAULT '{}', updatedAt INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (partition, subject, category)
 		)`,
-		`CREATE TABLE IF NOT EXISTS notify_user_events (
-			event_id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
-			event_type TEXT NOT NULL DEFAULT '', source_domain TEXT NOT NULL DEFAULT '',
-			idempotency_key TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
-			body TEXT NOT NULL DEFAULT '', action_url TEXT NOT NULL DEFAULT '',
-			payload_json TEXT NOT NULL DEFAULT '{}', channels TEXT NOT NULL DEFAULT '[]',
-			delivered INTEGER NOT NULL DEFAULT 0, subscriber_count INTEGER NOT NULL DEFAULT 0,
-			created_at INTEGER NOT NULL DEFAULT 0
+		`CREATE TABLE IF NOT EXISTS notifyUserEvents (
+			eventId TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
+			eventType TEXT NOT NULL DEFAULT '', sourceDomain TEXT NOT NULL DEFAULT '',
+			idempotencyKey TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+			body TEXT NOT NULL DEFAULT '', actionUrl TEXT NOT NULL DEFAULT '',
+			payloadJson TEXT NOT NULL DEFAULT '{}', channels TEXT NOT NULL DEFAULT '[]',
+			delivered INTEGER NOT NULL DEFAULT 0, subscriberCount INTEGER NOT NULL DEFAULT 0,
+			createdAt INTEGER NOT NULL DEFAULT 0
 		)`,
 		// Dedup only for a non-empty idempotency key: an empty key writes a fresh row every call.
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_user_events_idem ON notify_user_events(partition, subject, idempotency_key) WHERE idempotency_key != ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idxNotifyUserEventsIdem ON notifyUserEvents(partition, subject, idempotencyKey) WHERE idempotencyKey != ''`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -147,8 +147,8 @@ func readSliceS(s string) []string {
 
 // ── Notifications ──
 
-const notifCols = `id, partition, subject, category, title, body, priority, action_url, source,
-	source_entity, metadata, read, dismissed, delivered_via, created_at, read_at, dismissed_at`
+const notifCols = `id, partition, subject, category, title, body, priority, actionUrl, source,
+	sourceEntity, metadata, read, dismissed, deliveredVia, createdAt, readAt, dismissedAt`
 
 func scanNotif(sc interface{ Scan(...any) error }) (*Notification, error) {
 	var n Notification
@@ -178,7 +178,7 @@ func (s *SQLStore) CreateNotification(ctx context.Context, n *Notification) erro
 	if n.CreatedAt.IsZero() {
 		n.CreatedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notify_notifications (`+notifCols+`)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO notifyNotifications (`+notifCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.ID, n.Partition, n.Subject, n.Category, n.Title, n.Body, n.Priority, n.ActionURL, n.Source,
 		n.SourceEntity, jsonStrMapS(n.Metadata), boolInt(n.Read), boolInt(n.Dismissed),
@@ -187,7 +187,7 @@ func (s *SQLStore) CreateNotification(ctx context.Context, n *Notification) erro
 }
 
 func (s *SQLStore) GetNotification(ctx context.Context, partition, subject, id string) (*Notification, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+notifCols+` FROM notify_notifications
+	row := s.db.QueryRowContext(ctx, `SELECT `+notifCols+` FROM notifyNotifications
 		WHERE id = ? AND (? <> '' AND partition = ?) AND (? = '' OR subject = ?)`, id, partition, partition, subject, subject)
 	n, err := scanNotif(row)
 	if err == sql.ErrNoRows {
@@ -208,7 +208,7 @@ func (s *SQLStore) ListNotifications(ctx context.Context, partition, subject, ca
 			offset = v
 		}
 	}
-	q := `SELECT ` + notifCols + ` FROM notify_notifications WHERE ` + where + ` ORDER BY created_at DESC, id DESC`
+	q := `SELECT ` + notifCols + ` FROM notifyNotifications WHERE ` + where + ` ORDER BY createdAt DESC, id DESC`
 	fetch := limit
 	if limit > 0 {
 		fetch = limit + 1 // over-fetch one to know whether a next page exists
@@ -243,9 +243,9 @@ func (s *SQLStore) ListNotifications(ctx context.Context, partition, subject, ca
 }
 
 func (s *SQLStore) ListNotificationsSince(ctx context.Context, partition, subject string, since time.Time) ([]*Notification, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+notifCols+` FROM notify_notifications
-		WHERE (? <> '' AND partition = ?) AND subject = ? AND dismissed = 0 AND created_at > ?
-		ORDER BY created_at DESC, id DESC`, partition, partition, subject, since.UnixNano())
+	rows, err := s.db.QueryContext(ctx, `SELECT `+notifCols+` FROM notifyNotifications
+		WHERE (? <> '' AND partition = ?) AND subject = ? AND dismissed = 0 AND createdAt > ?
+		ORDER BY createdAt DESC, id DESC`, partition, partition, subject, since.UnixNano())
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +264,7 @@ func (s *SQLStore) ListNotificationsSince(ctx context.Context, partition, subjec
 func (s *SQLStore) UnreadCount(ctx context.Context, partition, subject string) (int, *time.Time, error) {
 	var count int
 	var latest sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), MAX(created_at) FROM notify_notifications
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), MAX(createdAt) FROM notifyNotifications
 		WHERE (? <> '' AND partition = ?) AND subject = ? AND read = 0 AND dismissed = 0`,
 		partition, partition, subject).Scan(&count, &latest)
 	if err != nil {
@@ -282,7 +282,7 @@ func (s *SQLStore) MarkRead(ctx context.Context, partition, subject string, ids 
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE notify_notifications SET read = 1, read_at = ?
+	res, err := s.db.ExecContext(ctx, `UPDATE notifyNotifications SET read = 1, readAt = ?
 		WHERE (? <> '' AND partition = ?) AND subject = ? AND read = 0 AND id IN (`+ph+`)`, args...)
 	if err != nil {
 		return 0, err
@@ -292,7 +292,7 @@ func (s *SQLStore) MarkRead(ctx context.Context, partition, subject string, ids 
 }
 
 func (s *SQLStore) MarkAllRead(ctx context.Context, partition, subject string) (int, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE notify_notifications SET read = 1, read_at = ?
+	res, err := s.db.ExecContext(ctx, `UPDATE notifyNotifications SET read = 1, readAt = ?
 		WHERE (? <> '' AND partition = ?) AND subject = ? AND read = 0 AND dismissed = 0`,
 		time.Now().UnixNano(), partition, partition, subject)
 	if err != nil {
@@ -303,8 +303,8 @@ func (s *SQLStore) MarkAllRead(ctx context.Context, partition, subject string) (
 }
 
 func (s *SQLStore) Dismiss(ctx context.Context, partition, subject, id string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE notify_notifications SET dismissed = 1,
-		dismissed_at = COALESCE(dismissed_at, ?) WHERE id = ? AND (? <> '' AND partition = ?) AND subject = ?`,
+	res, err := s.db.ExecContext(ctx, `UPDATE notifyNotifications SET dismissed = 1,
+		dismissedAt = COALESCE(dismissedAt, ?) WHERE id = ? AND (? <> '' AND partition = ?) AND subject = ?`,
 		time.Now().UnixNano(), id, partition, partition, subject)
 	if err != nil {
 		return err
@@ -316,7 +316,7 @@ func (s *SQLStore) Dismiss(ctx context.Context, partition, subject, id string) e
 }
 
 func (s *SQLStore) SetDeliveredVia(ctx context.Context, id string, channels []string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE notify_notifications SET delivered_via = ? WHERE id = ?`,
+	res, err := s.db.ExecContext(ctx, `UPDATE notifyNotifications SET deliveredVia = ? WHERE id = ?`,
 		jsonSliceS(channels), id)
 	if err != nil {
 		return err
@@ -337,22 +337,22 @@ func (s *SQLStore) RegisterToken(ctx context.Context, t *DeviceToken) error {
 		t.CreatedAt = time.Now()
 	}
 	now := time.Now().UnixNano()
-	// Token is unique. A FIRST registration leaves last_seen_at NULL (cleanup then falls back to
-	// created_at, matching MemStore); a RE-register refreshes partition/subject/platform + last_seen and clears
-	// invalidation. The update's last_seen_at is a bound parameter, not excluded (which is NULL here).
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notify_device_tokens
-		(id, partition, subject, token, platform, provider, created_at, last_seen_at, invalidated_at)
+	// Token is unique. A FIRST registration leaves lastSeenAt NULL (cleanup then falls back to
+	// createdAt, matching MemStore); a RE-register refreshes partition/subject/platform + last_seen and clears
+	// invalidation. The update's lastSeenAt is a bound parameter, not excluded (which is NULL here).
+	_, err := s.db.ExecContext(ctx, `INSERT INTO notifyDeviceTokens
+		(id, partition, subject, token, platform, provider, createdAt, lastSeenAt, invalidatedAt)
 		VALUES (?,?,?,?,?,?,?,NULL,NULL)
 		ON CONFLICT(token) DO UPDATE SET partition=excluded.partition, subject=excluded.subject,
-			platform=excluded.platform, provider=excluded.provider, last_seen_at=?, invalidated_at=NULL`,
+			platform=excluded.platform, provider=excluded.provider, lastSeenAt=?, invalidatedAt=NULL`,
 		t.ID, t.Partition, t.Subject, t.Token, t.Platform, t.Provider, tnanos(t.CreatedAt), now)
 	return err
 }
 
 func (s *SQLStore) ListActiveTokens(ctx context.Context, partition, subject string) ([]*DeviceToken, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, partition, subject, token, platform, provider,
-		created_at, last_seen_at, invalidated_at FROM notify_device_tokens
-		WHERE (? <> '' AND partition = ?) AND subject = ? AND invalidated_at IS NULL ORDER BY created_at ASC`,
+		createdAt, lastSeenAt, invalidatedAt FROM notifyDeviceTokens
+		WHERE (? <> '' AND partition = ?) AND subject = ? AND invalidatedAt IS NULL ORDER BY createdAt ASC`,
 		partition, partition, subject)
 	if err != nil {
 		return nil, err
@@ -376,8 +376,8 @@ func (s *SQLStore) ListActiveTokens(ctx context.Context, partition, subject stri
 }
 
 func (s *SQLStore) InvalidateToken(ctx context.Context, partition, token string, at int64) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE notify_device_tokens
-		SET invalidated_at = COALESCE(invalidated_at, ?) WHERE token = ? AND (? <> '' AND partition = ?)`,
+	res, err := s.db.ExecContext(ctx, `UPDATE notifyDeviceTokens
+		SET invalidatedAt = COALESCE(invalidatedAt, ?) WHERE token = ? AND (? <> '' AND partition = ?)`,
 		at, token, partition, partition)
 	if err != nil {
 		return err
@@ -389,8 +389,8 @@ func (s *SQLStore) InvalidateToken(ctx context.Context, partition, token string,
 }
 
 func (s *SQLStore) CleanupStaleTokens(ctx context.Context, before int64) (int, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM notify_device_tokens
-		WHERE COALESCE(last_seen_at, created_at) < ?`, before)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM notifyDeviceTokens
+		WHERE COALESCE(lastSeenAt, createdAt) < ?`, before)
 	if err != nil {
 		return 0, err
 	}
@@ -401,8 +401,8 @@ func (s *SQLStore) CleanupStaleTokens(ctx context.Context, before int64) (int, e
 // ── Preferences ──
 
 func (s *SQLStore) GetPreferences(ctx context.Context, partition, subject string) ([]*Preference, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT partition, subject, category, channels, updated_at
-		FROM notify_preferences WHERE (? <> '' AND partition = ?) AND subject = ? ORDER BY category ASC`,
+	rows, err := s.db.QueryContext(ctx, `SELECT partition, subject, category, channels, updatedAt
+		FROM notifyPreferences WHERE (? <> '' AND partition = ?) AND subject = ? ORDER BY category ASC`,
 		partition, partition, subject)
 	if err != nil {
 		return nil, err
@@ -424,9 +424,9 @@ func (s *SQLStore) GetPreferences(ctx context.Context, partition, subject string
 }
 
 func (s *SQLStore) SetPreference(ctx context.Context, p *Preference) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notify_preferences (partition, subject, category, channels, updated_at)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO notifyPreferences (partition, subject, category, channels, updatedAt)
 		VALUES (?,?,?,?,?)
-		ON CONFLICT(partition, subject, category) DO UPDATE SET channels=excluded.channels, updated_at=excluded.updated_at`,
+		ON CONFLICT(partition, subject, category) DO UPDATE SET channels=excluded.channels, updatedAt=excluded.updatedAt`,
 		p.Partition, p.Subject, p.Category, jsonBoolMapS(p.Channels), time.Now().UnixNano())
 	return err
 }

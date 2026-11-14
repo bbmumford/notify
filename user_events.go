@@ -33,7 +33,7 @@ type UserEvent struct {
 }
 
 // ErrUserEventAlreadyPublished is returned by RecordUserEvent when the
-// (partition, subject, idempotency_key) tuple already exists. A caller MUST treat
+// (partition, subject, idempotencyKey) tuple already exists. A caller MUST treat
 // it as an idempotent replay and surface the returned row's cached outcome.
 var ErrUserEventAlreadyPublished = errors.New("notify: user event already published")
 
@@ -49,7 +49,7 @@ func cloneUserEvent(e *UserEvent) *UserEvent {
 
 func (m *MemStore) RecordUserEvent(_ context.Context, e *UserEvent) (*UserEvent, error) {
 	if e.Partition == "" || e.Subject == "" || e.EventType == "" {
-		return nil, errors.New("notify: partition, subject, event_type are required")
+		return nil, errors.New("notify: partition, subject, eventType are required")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -100,7 +100,7 @@ func (m *MemStore) GetUserEventByIdempotency(_ context.Context, partition, subje
 
 func (s *SQLStore) RecordUserEvent(ctx context.Context, e *UserEvent) (*UserEvent, error) {
 	if e.Partition == "" || e.Subject == "" || e.EventType == "" {
-		return nil, errors.New("notify: partition, subject, event_type are required")
+		return nil, errors.New("notify: partition, subject, eventType are required")
 	}
 	if e.IdempotencyKey != "" {
 		existing, err := s.GetUserEventByIdempotency(ctx, e.Partition, e.Subject, e.IdempotencyKey)
@@ -116,15 +116,15 @@ func (s *SQLStore) RecordUserEvent(ctx context.Context, e *UserEvent) (*UserEven
 	if e.CreatedAt == 0 {
 		e.CreatedAt = time.Now().Unix()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notify_user_events
-		(event_id, partition, subject, event_type, source_domain, idempotency_key,
-		 title, body, action_url, payload_json, channels, delivered, subscriber_count, created_at)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO notifyUserEvents
+		(eventId, partition, subject, eventType, sourceDomain, idempotencyKey,
+		 title, body, actionUrl, payloadJson, channels, delivered, subscriberCount, createdAt)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.EventID, e.Partition, e.Subject, e.EventType, e.SourceDomain, e.IdempotencyKey,
 		e.Title, e.Body, e.ActionURL, e.PayloadJSON, jsonSliceS(e.Channels),
 		boolInt(e.Delivered), e.SubscriberCount, e.CreatedAt)
 	if err != nil {
-		// Race: a concurrent insert won the unique (partition,user,idempotency_key).
+		// Race: a concurrent insert won the unique (partition,user,idempotencyKey).
 		// Return the winner's row as an idempotent replay rather than the raw error.
 		if e.IdempotencyKey != "" {
 			if winner, gerr := s.GetUserEventByIdempotency(ctx, e.Partition, e.Subject, e.IdempotencyKey); gerr == nil {
@@ -137,8 +137,8 @@ func (s *SQLStore) RecordUserEvent(ctx context.Context, e *UserEvent) (*UserEven
 }
 
 func (s *SQLStore) UpdateUserEventOutcome(ctx context.Context, eventID string, delivered bool, subscriberCount int32, channels []string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE notify_user_events
-		SET delivered = ?, subscriber_count = ?, channels = ? WHERE event_id = ?`,
+	res, err := s.db.ExecContext(ctx, `UPDATE notifyUserEvents
+		SET delivered = ?, subscriberCount = ?, channels = ? WHERE eventId = ?`,
 		boolInt(delivered), subscriberCount, jsonSliceS(channels), eventID)
 	if err != nil {
 		return err
@@ -156,9 +156,9 @@ func (s *SQLStore) GetUserEventByIdempotency(ctx context.Context, partition, sub
 		deliveredInt int
 	)
 	err := s.db.QueryRowContext(ctx, `SELECT
-		event_id, partition, subject, event_type, source_domain, idempotency_key,
-		title, body, action_url, payload_json, channels, delivered, subscriber_count, created_at
-		FROM notify_user_events WHERE partition = ? AND subject = ? AND idempotency_key = ? LIMIT 1`,
+		eventId, partition, subject, eventType, sourceDomain, idempotencyKey,
+		title, body, actionUrl, payloadJson, channels, delivered, subscriberCount, createdAt
+		FROM notifyUserEvents WHERE partition = ? AND subject = ? AND idempotencyKey = ? LIMIT 1`,
 		partition, subject, idempotencyKey).Scan(
 		&e.EventID, &e.Partition, &e.Subject, &e.EventType, &e.SourceDomain, &e.IdempotencyKey,
 		&e.Title, &e.Body, &e.ActionURL, &e.PayloadJSON, &channels, &deliveredInt, &e.SubscriberCount, &e.CreatedAt)
