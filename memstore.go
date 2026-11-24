@@ -20,18 +20,21 @@ type MemStore struct {
 	tokens map[string]*DeviceToken
 	prefs  []*Preference
 	events map[string]*UserEvent // user-event idempotency anchors, keyed by EventID
-	now    func() time.Time
-	newID  func() string
+	// notifKeys maps a notification's (partition, subject, idempotency key) to its ID.
+	notifKeys map[[3]string]string
+	now       func() time.Time
+	newID     func() string
 }
 
 // NewMemStore builds an empty notify store.
 func NewMemStore() *MemStore {
 	return &MemStore{
-		notifs: map[string]*Notification{},
-		tokens: map[string]*DeviceToken{},
-		events: map[string]*UserEvent{},
-		now:    time.Now,
-		newID:  randomID,
+		notifs:    map[string]*Notification{},
+		tokens:    map[string]*DeviceToken{},
+		events:    map[string]*UserEvent{},
+		notifKeys: map[[3]string]string{},
+		now:       time.Now,
+		newID:     randomID,
 	}
 }
 
@@ -57,13 +60,39 @@ func partitionMatch(want, have string) bool { return want != "" && want == have 
 func (m *MemStore) CreateNotification(_ context.Context, n *Notification) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	key := [3]string{n.Partition, n.Subject, n.IdempotencyKey}
+	if n.IdempotencyKey != "" {
+		if id, used := m.notifKeys[key]; used {
+			if prior, ok := m.notifs[id]; ok {
+				*n = *cloneNotification(prior)
+				n.IdempotencyKey = key[2]
+				return ErrNotificationExists
+			}
+		}
+	}
 	if n.ID == "" {
 		n.ID = m.newID()
+	} else if prior, ok := m.notifs[n.ID]; ok {
+		if prior.Partition != n.Partition || prior.Subject != n.Subject {
+			return ErrNotificationIDTaken
+		}
+		key := n.IdempotencyKey
+		*n = *cloneNotification(prior)
+		n.IdempotencyKey = key
+		return ErrNotificationExists
 	}
 	if n.CreatedAt.IsZero() {
 		n.CreatedAt = m.now()
 	}
-	m.notifs[n.ID] = cloneNotification(n)
+	stored := cloneNotification(n)
+	stored.IdempotencyKey = ""
+	m.notifs[n.ID] = stored
+	if n.IdempotencyKey != "" {
+		if m.notifKeys == nil {
+			m.notifKeys = map[[3]string]string{}
+		}
+		m.notifKeys[key] = n.ID
+	}
 	return nil
 }
 

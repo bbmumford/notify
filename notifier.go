@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -90,8 +91,15 @@ func (e *configError) Error() string { return e.msg }
 // channel that has a registered Sink. A Sink error does not fail the whole call or lose the in-app
 // record; the channel is simply omitted from DeliveredVia and its error collected. The delivered
 // channels (always including in_app) are recorded on the notification. Returns per-channel Sink errors.
+//
+// A notification carrying an IdempotencyKey its partition and subject have already used is a replay:
+// nothing is stored or delivered again, notif is filled with the stored notification, and Notify
+// answers no error, so a caller that retries after an unknown outcome delivers at most once.
 func (n *Notifier) Notify(ctx context.Context, notif *Notification) (deliverErrs map[string]error, err error) {
 	if err := n.store.CreateNotification(ctx, notif); err != nil {
+		if errors.Is(err, ErrNotificationExists) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	prefs, err := n.store.GetPreferences(ctx, notif.Partition, notif.Subject)

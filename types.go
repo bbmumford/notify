@@ -29,6 +29,11 @@ type Notification struct {
 	CreatedAt    time.Time
 	ReadAt       *time.Time
 	DismissedAt  *time.Time
+	// IdempotencyKey, when set, makes the notification's creation idempotent per (Partition, Subject,
+	// key): CreateNotification of a key already used answers the stored notification with
+	// ErrNotificationExists and stores nothing, so Notify, retried with the same key, delivers once.
+	// It is write-side only: no read returns it, except the stored row a replay answers.
+	IdempotencyKey string
 }
 
 // DeviceToken is a registered push endpoint for one of a subject's devices. Platform and Provider are

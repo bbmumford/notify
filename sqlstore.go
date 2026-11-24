@@ -35,6 +35,12 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			createdAt INTEGER NOT NULL DEFAULT 0, readAt INTEGER, dismissedAt INTEGER
 		)`,
 		`CREATE INDEX IF NOT EXISTS idxNotifyNotifsSubject ON notifyNotifications(partition, subject, createdAt)`,
+		// One row per notification created with an idempotency key; its primary key is the dedup tuple.
+		`CREATE TABLE IF NOT EXISTS notifyNotificationKeys (
+			partition TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
+			idempotencyKey TEXT NOT NULL, notificationId TEXT NOT NULL,
+			PRIMARY KEY (partition, subject, idempotencyKey)
+		)`,
 		`CREATE TABLE IF NOT EXISTS notifyDeviceTokens (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
 			token TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '',
@@ -178,12 +184,63 @@ func (s *SQLStore) CreateNotification(ctx context.Context, n *Notification) erro
 	if n.CreatedAt.IsZero() {
 		n.CreatedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notifyNotifications (`+notifCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	// The key row and the notification commit together, so a key is never held by a notification that
+	// was not stored, and a concurrent create with the same key finds the first one's row.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if n.IdempotencyKey != "" {
+		res, err := tx.ExecContext(ctx, `INSERT INTO notifyNotificationKeys (partition, subject, idempotencyKey, notificationId)
+			VALUES (?,?,?,?) ON CONFLICT(partition, subject, idempotencyKey) DO NOTHING`,
+			n.Partition, n.Subject, n.IdempotencyKey, n.ID)
+		if err != nil {
+			return err
+		}
+		if added, err := res.RowsAffected(); err != nil {
+			return err
+		} else if added == 0 {
+			var id string
+			if err := tx.QueryRowContext(ctx, `SELECT notificationId FROM notifyNotificationKeys
+				WHERE partition = ? AND subject = ? AND idempotencyKey = ?`,
+				n.Partition, n.Subject, n.IdempotencyKey).Scan(&id); err != nil {
+				return err
+			}
+			prior, err := scanNotif(tx.QueryRowContext(ctx, `SELECT `+notifCols+` FROM notifyNotifications WHERE id = ?`, id))
+			if err != nil {
+				return err
+			}
+			key := n.IdempotencyKey
+			*n = *prior
+			n.IdempotencyKey = key
+			return ErrNotificationExists
+		}
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO notifyNotifications (`+notifCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
 		n.ID, n.Partition, n.Subject, n.Category, n.Title, n.Body, n.Priority, n.ActionURL, n.Source,
 		n.SourceEntity, jsonStrMapS(n.Metadata), boolInt(n.Read), boolInt(n.Dismissed),
 		jsonSliceS(n.DeliveredVia), tnanos(n.CreatedAt), ptrNanos(n.ReadAt), ptrNanos(n.DismissedAt))
-	return err
+	if err != nil {
+		return err
+	}
+	if added, err := res.RowsAffected(); err != nil {
+		return err
+	} else if added == 0 {
+		prior, err := scanNotif(tx.QueryRowContext(ctx, `SELECT `+notifCols+` FROM notifyNotifications WHERE id = ?`, n.ID))
+		if err != nil {
+			return err
+		}
+		if prior.Partition != n.Partition || prior.Subject != n.Subject {
+			return ErrNotificationIDTaken
+		}
+		key := n.IdempotencyKey
+		*n = *prior
+		n.IdempotencyKey = key
+		return ErrNotificationExists
+	}
+	return tx.Commit()
 }
 
 func (s *SQLStore) GetNotification(ctx context.Context, partition, subject, id string) (*Notification, error) {
