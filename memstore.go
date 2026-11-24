@@ -260,9 +260,13 @@ func (m *MemStore) SetDeliveredVia(_ context.Context, id string, channels []stri
 func (m *MemStore) RegisterToken(_ context.Context, t *DeviceToken) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// A token string is unique; re-registering refreshes LastSeenAt and clears invalidation.
+	// A token string is unique; re-registering refreshes LastSeenAt and clears invalidation. A valid
+	// token stays with its holder: another partition or subject presenting it is refused.
 	for _, e := range m.tokens {
 		if e.Token == t.Token {
+			if (e.Partition != t.Partition || e.Subject != t.Subject) && e.InvalidatedAt == nil {
+				return ErrTokenHeld
+			}
 			now := m.now()
 			e.LastSeenAt = &now
 			e.InvalidatedAt = nil

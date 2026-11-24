@@ -14,6 +14,11 @@ var ErrNotFound = errors.New("notify: not found")
 // (Partition, Subject). The notification passed in is filled with the stored one and nothing is written.
 var ErrNotificationExists = errors.New("notify: the notification is already stored")
 
+// ErrTokenHeld answers RegisterToken of a push token another partition or subject holds and has not
+// invalidated: the token keeps its holder, so a token presented by someone else never redirects that
+// holder's pushes.
+var ErrTokenHeld = errors.New("notify: the push token is registered to another subject")
+
 // ErrNotificationIDTaken answers CreateNotification of an ID already stored under another partition or
 // subject; nothing is written and nothing of the stored notification is answered.
 var ErrNotificationIDTaken = errors.New("notify: the notification id is taken")
@@ -49,6 +54,9 @@ type Store interface {
 	SetDeliveredVia(ctx context.Context, id string, channels []string) error
 
 	// ── Push device tokens ──
+	// RegisterToken records t, or re-registers its token for the same (Partition, Subject), refreshing
+	// LastSeenAt and clearing an invalidation. A token held by another partition or subject is refused
+	// with ErrTokenHeld while it is valid; once invalidated it may be registered by anyone.
 	RegisterToken(ctx context.Context, t *DeviceToken) error
 	ListActiveTokens(ctx context.Context, partition, subject string) ([]*DeviceToken, error)
 	InvalidateToken(ctx context.Context, partition, token string, at int64) error

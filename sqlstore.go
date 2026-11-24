@@ -396,14 +396,26 @@ func (s *SQLStore) RegisterToken(ctx context.Context, t *DeviceToken) error {
 	now := time.Now().UnixNano()
 	// Token is unique. A FIRST registration leaves lastSeenAt NULL (cleanup then falls back to
 	// createdAt, matching MemStore); a RE-register refreshes partition/subject/platform + last_seen and clears
-	// invalidation. The update's lastSeenAt is a bound parameter, not excluded (which is NULL here).
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notifyDeviceTokens
+	// invalidation. The update's lastSeenAt is a bound parameter, not excluded (which is NULL here). The
+	// update applies only for the token's own holder or an invalidated token, so a valid token presented
+	// by another partition or subject changes no row and is refused.
+	res, err := s.db.ExecContext(ctx, `INSERT INTO notifyDeviceTokens
 		(id, partition, subject, token, platform, provider, createdAt, lastSeenAt, invalidatedAt)
 		VALUES (?,?,?,?,?,?,?,NULL,NULL)
 		ON CONFLICT(token) DO UPDATE SET partition=excluded.partition, subject=excluded.subject,
-			platform=excluded.platform, provider=excluded.provider, lastSeenAt=?, invalidatedAt=NULL`,
+			platform=excluded.platform, provider=excluded.provider, lastSeenAt=?, invalidatedAt=NULL
+		WHERE (notifyDeviceTokens.partition = excluded.partition AND notifyDeviceTokens.subject = excluded.subject)
+			OR notifyDeviceTokens.invalidatedAt IS NOT NULL`,
 		t.ID, t.Partition, t.Subject, t.Token, t.Platform, t.Provider, tnanos(t.CreatedAt), now)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrTokenHeld
+	}
+	return nil
 }
 
 func (s *SQLStore) ListActiveTokens(ctx context.Context, partition, subject string) ([]*DeviceToken, error) {
