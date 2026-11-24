@@ -49,7 +49,8 @@ func randomID() string {
 // lookup in this store filters through it.
 //
 // An empty `want` names no partition and matches nothing. SQLStore answers the same
-// way — its predicates read (? <> ” AND partition = ?) — and the two have to agree,
+// way — each of its predicates first requires the partition parameter to be non-empty and then
+// compares it to the row's — and the two have to agree,
 // because a test written against this store is what certifies the other's behaviour.
 // The category filter beside it keeps empty-meaning-any: it narrows a result set
 // inside one partition and carries no authority.

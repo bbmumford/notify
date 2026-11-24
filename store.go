@@ -20,7 +20,8 @@ var ErrNotificationIDTaken = errors.New("notify: the notification id is taken")
 
 // Store is the persistence contract: notifications, push device tokens, and channel preferences. The
 // Partition is opaque and the store filters on it, never interprets it; an empty partition ("") on a
-// partition-scoped read matches NOTHING — the predicates read (? <> ” AND partition = ?), so an
+// partition-scoped read matches NOTHING — each predicate first requires the partition parameter to be
+// non-empty, then compares it to the row's, so an
 // unscoped read returns no rows rather than every partition's. A blank partition that matched everything
 // would read another partition's notifications and device tokens. There is no unscoped read; a caller
 // that must cross partitions names the partition it means. A consumer supplies a *sql.DB store
