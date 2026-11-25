@@ -42,7 +42,9 @@ func TestRegisterToken_AValidTokenIsNotMovedToAnotherSubject(t *testing.T) {
 // be registered by the device's next subject.
 func TestRegisterToken_TheHolderAndAnInvalidatedTokenReRegister(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		s.RegisterToken(ctx, &DeviceToken{Partition: "acme", Subject: "u1", Token: "tok-1", Platform: "ios", CreatedAt: at})
+		if err := s.RegisterToken(ctx, &DeviceToken{Partition: "acme", Subject: "u1", Token: "tok-1", Platform: "ios", CreatedAt: at}); err != nil {
+			t.Fatalf("s.RegisterToken: %v", err)
+		}
 		if err := s.RegisterToken(ctx, &DeviceToken{Partition: "acme", Subject: "u1", Token: "tok-1", Platform: "android", CreatedAt: at}); err != nil {
 			t.Fatalf("the holder's re-register: %v", err)
 		}

@@ -190,7 +190,7 @@ func (s *SQLStore) CreateNotification(ctx context.Context, n *Notification) erro
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	if n.IdempotencyKey != "" {
 		res, err := tx.ExecContext(ctx, `INSERT INTO notifyNotificationKeys (partition, subject, idempotencyKey, notificationId)
 			VALUES (?,?,?,?) ON CONFLICT(partition, subject, idempotencyKey) DO NOTHING`,
@@ -266,11 +266,10 @@ func (s *SQLStore) ListNotifications(ctx context.Context, partition, subject, ca
 		}
 	}
 	q := `SELECT ` + notifCols + ` FROM notifyNotifications WHERE ` + where + ` ORDER BY createdAt DESC, id DESC`
-	fetch := limit
 	if limit > 0 {
-		fetch = limit + 1 // over-fetch one to know whether a next page exists
+		// over-fetch one to know whether a next page exists
 		q += ` LIMIT ? OFFSET ?`
-		args = append(args, fetch, offset)
+		args = append(args, limit+1, offset)
 	} else if offset > 0 {
 		q += ` LIMIT -1 OFFSET ?`
 		args = append(args, offset)
@@ -279,7 +278,7 @@ func (s *SQLStore) ListNotifications(ctx context.Context, partition, subject, ca
 	if err != nil {
 		return nil, "", err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Notification
 	for rows.Next() {
 		n, err := scanNotif(rows)
@@ -306,7 +305,7 @@ func (s *SQLStore) ListNotificationsSince(ctx context.Context, partition, subjec
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Notification
 	for rows.Next() {
 		n, err := scanNotif(rows)
@@ -426,7 +425,7 @@ func (s *SQLStore) ListActiveTokens(ctx context.Context, partition, subject stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*DeviceToken
 	for rows.Next() {
 		var t DeviceToken
@@ -476,7 +475,7 @@ func (s *SQLStore) GetPreferences(ctx context.Context, partition, subject string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Preference
 	for rows.Next() {
 		var p Preference
@@ -499,3 +498,14 @@ func (s *SQLStore) SetPreference(ctx context.Context, p *Preference) error {
 		p.Partition, p.Subject, p.Category, jsonBoolMapS(p.Channels), time.Now().UnixNano())
 	return err
 }
+
+// rollbackUnlessCommitted is the deferred Rollback of every transaction in this
+// package. After Commit it returns sql.ErrTxDone, and an early return already
+// carries the error that stopped the transaction; its result is dropped.
+func rollbackUnlessCommitted(tx *sql.Tx) { _ = tx.Rollback() }
+
+// closeRows is the deferred Close of every query's rows in this package.
+// database/sql closes rows itself once Next reports the end, so a normal return
+// leaves nothing to close, and an early return already carries the error that
+// stopped the read; its result is dropped.
+func closeRows(rows *sql.Rows) { _ = rows.Close() }

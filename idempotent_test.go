@@ -18,7 +18,9 @@ func countNotifications(t *testing.T, s Store, partition, subject string) int {
 // stores one inbox row and delivers once.
 func TestNotify_ARetryOfTheSameNotificationDeliversOnce(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "*", Channels: map[string]bool{"in_app": true, "email": true}})
+		if err := s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "*", Channels: map[string]bool{"in_app": true, "email": true}}); err != nil {
+			t.Fatalf("s.SetPreference: %v", err)
+		}
 		email := &recordingSink{channel: "email"}
 		nf, err := NewNotifier(NotifierConfig{Store: s, Sinks: []Sink{email}})
 		if err != nil {
@@ -44,7 +46,9 @@ func TestNotify_ARetryOfTheSameNotificationDeliversOnce(t *testing.T) {
 // row and deliver once; the second notification is answered with the first.
 func TestNotify_TheSameIdempotencyKeyDeliversOnce(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "*", Channels: map[string]bool{"in_app": true, "email": true}})
+		if err := s.SetPreference(ctx, &Preference{Partition: "acme", Subject: "u1", Category: "*", Channels: map[string]bool{"in_app": true, "email": true}}); err != nil {
+			t.Fatalf("s.SetPreference: %v", err)
+		}
 		email := &recordingSink{channel: "email"}
 		nf, _ := NewNotifier(NotifierConfig{Store: s, Sinks: []Sink{email}})
 		first := &Notification{Partition: "acme", Subject: "u1", Category: "billing", Title: "Invoice", IdempotencyKey: "inv-7", CreatedAt: at}

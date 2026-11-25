@@ -14,7 +14,11 @@ func openDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1) // keep the :memory: DB on one connection
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db.Close: %v", err)
+		}
+	})
 	return db
 }
 
